@@ -1,32 +1,52 @@
 import socket
 import sys
 import argparse
+import threading
 from datetime import datetime
 
-def scan_port(host, port):
-    # AF_INET is for IPv4; SOCK_STREAM is for TCP
-    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    s.settimeout(1)
+# Global counter for open ports
+OPEN_PORTS_COUNT = 0
+# Semaphore to limit the number of active threads (e.g., max 100 simultaneous threads)
+THREAT_SEMAPHORE = threading.BoundedSemaphore(value=100)
 
-    result = s.connect_ex((host, port))
-    s.close()
 
-    if result == 0:
-        try:
-            service = socket.getservbyport(port)
-        except OSError:
-            service = "unknown service"
+# 1. Port Scanning Function
+def scan_port(target_ip, port):
+    # Attempts to connect to a specific port on a host.
+    global OPEN_PORTS_COUNT
+
+    # Acquire the semaphore to run this thread
+    THREAT_SEMAPHORE.acquire()
+
+    try:
+        # AF_INET is for IPv4; SOCK_STREAM is for TCP
+        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        s.settimeout(1) # Timeout is crucial for threads
+
+        result = s.connect_ex((target_ip, port))
+        s.close()
+
+        if result == 0:
+            try:
+                service = socket.getservbyport(port)
+            except OSError:
+                service = "unknown service"
         
-        sys.stdout.write(f"\r [+] Port {port:<5} is OPEN | Service: {service}\n")
-        return True
+            print(f"\r [+] Port {port:<5} is OPEN | Service: {service}\n")
+            OPEN_PORTS_COUNT += 1
+    except Exception as e:
+        # Handle exceptions within the thread
+        pass
+    finally:
+        # Release the semaphore after finishing
+        THREAT_SEMAPHORE.release()
     
-    sys.stdout.write(f"\r [*] Scanning port {port}...")
-    sys.stdout.flush()
-    return False
+# 2. Argument Parsing and Main Execution
 
 def parse_arguments():
+    # Configures and parses command-line arguments.
     parser = argparse.ArgumentParser(
-        description="Simple TCP Port Scanner"
+        description="Simple multi-threaded TCP Port Scanner"
     )
 
     # Required argument for target host
@@ -44,6 +64,8 @@ def parse_arguments():
     return parser.parse_args()
 
 def main():
+    global OPEN_PORTS_COUNT
+    threads = []
     # Configuration
     args = parse_arguments()
     target_host = args.target
@@ -70,28 +92,31 @@ def main():
     print(f"Port: {start_port}-{end_port}")
     print(f"Time started: {datetime.now().strftime('%H:%M:%S')}")
     print("-" * 50)
-
-    start_port = 20
-    end_port = 1024
     
-    open_count = 0
-    
-    
+    # Scanning loops with exit
     try: 
-        # Iterate through the port range
         for port in range(start_port, end_port + 1):
-            if scan_port(target_ip, port):
-                open_count += 1
+            # Create a new thread for each port scan
+            t = threading.Thread(target=scan_port, args=(target_ip, port))
+            threads.append(t)
+            t.start()
+        
+        # Wait for all threads to finish before exiting main
+        for t in threads:
+            t.join()
     
     except KeyboardInterrupt:
-        sys.stdout.write('\r' + ' ' * 50 + '\r')
-        print("\n[*] Scan interrupted by user (Ctrl+C).")
+        sys.stdout.write('\r' + ' ' * 50 + '\r') 
+        print("[*] Scan interrupted by user (Ctrl+C).")
+        # Note: Threading makes a clean exit harder, but the join() helps wait for running ones
         
-        
-    print("-" * 50)
-    print(f"Scan finished. Total open ports found: {open_count}")
+    # Clear the scanning progress line before printing the final message
+    sys.stdout.write('\r' + ' ' * 50 + '\r') 
+    
+    print("\n" + "-" * 50)
+    print(f"Scan finished. Total open ports found: {OPEN_PORTS_COUNT}")
     print("-" * 50)
 
-if __name__ == "__main__":
+
+if __name__ == '__main__':
     main()
-        
